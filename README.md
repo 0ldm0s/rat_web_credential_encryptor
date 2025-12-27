@@ -173,7 +173,7 @@ cargo run
 
 ## 许可证
 
-MIT
+LGPL-3.0-or-later（GNU Lesser General Public License v3.0 or later）
 
 ## 贡献
 
