@@ -1,0 +1,34 @@
+{
+  "name": "rat-web-credential-encryptor",
+  "version": "0.1.0",
+  "description": "JavaScript 加密库，与 rat_web_credential_encryptor Rust 库配合使用",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "test": "node --test dist/test/*.test.js",
+    "prepublishOnly": "npm run build"
+  },
+  "keywords": [
+    "crypto",
+    "encryption",
+    "ecdh",
+    "aes-gcm",
+    "p256"
+  ],
+  "author": "",
+  "license": "MIT",
+  "devDependencies": {
+    "typescript": "^5.0.0"
+  }
+}
