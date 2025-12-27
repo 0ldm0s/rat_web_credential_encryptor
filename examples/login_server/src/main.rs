@@ -4,37 +4,36 @@
 
 use hyper::server::conn::http1;
 use hyper::service::service_fn;
-use hyper::{Request, Response, StatusCode, Method};
+use hyper::{Request, Response, StatusCode};
 use hyper_util::rt::TokioIo;
 use http_body_util::{BodyExt, Full};
 use hyper::body::Bytes;
-use rat_web_credential_encryptor::{
-    derive_shared_secret, export_public_key, import_public_key,
-    decrypt_string, PublicKey, PrivateKey, SharedKey,
-};
-use std::collections::HashMap;
+use rat_web_credential_encryptor::{SessionManager, decrypt_string_ctr};
+use base64ct::Encoding;
 use std::net::SocketAddr;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+use std::time::Duration;
 use tokio::net::TcpListener;
+use std::collections::HashMap;
+use std::sync::Mutex;
 
-/// 服务器状态，存储会话和密钥
+/// Demo解密详情（存储在内存中）
 #[derive(Clone)]
-struct ServerState {
-    /// 服务器密钥对
-    server_privkey: Arc<PrivateKey>,
-    server_pubkey: Arc<PublicKey>,
-    /// 客户端公钥缓存 (session_id -> PublicKey)
-    client_keys: Arc<Mutex<HashMap<String, PublicKey>>>,
-    /// 派生的共享密钥缓存 (session_id -> SharedKey)
-    shared_keys: Arc<Mutex<HashMap<String, SharedKey>>>,
+struct DemoDecryptResult {
+    key: String,
+    encrypted_data: String,
+    username: String,
+    password: String,
 }
 
-/// 请求类型
-#[derive(serde::Deserialize)]
-struct LoginRequest {
-    session_id: String,
-    /// Base64 编码的加密数据
-    encrypted_data: String,
+/// 服务器状态
+#[derive(Clone)]
+struct ServerState {
+    /// 会话管理器
+    session_manager: Arc<SessionManager>,
+    /// Demo结果存储：demo_id -> 解密详情
+    /// ⚠️ 仅用于demo演示，生产环境不应存储明文密码
+    demo_results: Arc<Mutex<HashMap<String, DemoDecryptResult>>>,
 }
 
 /// 响应类型
@@ -47,12 +46,35 @@ struct ApiResponse<T> {
     error: Option<String>,
 }
 
-/// 公钥响应
+/// 密钥响应
 #[derive(serde::Serialize)]
-struct PubKeyResponse {
-    /// Base64 编码的服务器公钥
-    server_pubkey: String,
+struct KeyResponse {
+    /// Base64 编码的 AES 密钥
+    key: String,
+    /// 会话 ID
     session_id: String,
+}
+
+/// 登录响应
+#[derive(serde::Serialize)]
+struct LoginResponse {
+    /// Demo ID，用于获取解密详情（仅demo用途）
+    demo_id: String,
+}
+
+/// Demo解密详情响应
+///
+/// ⚠️ 警告：此结构仅用于demo演示，生产环境绝对不能返回明文密码和密钥！
+#[derive(serde::Serialize)]
+struct DemoDecryptResponse {
+    /// Base64 编码的密钥
+    key: String,
+    /// 加密数据
+    encrypted_data: String,
+    /// 解密后的用户名
+    username: String,
+    /// 解密后的密码（⚠️ 生产环境严禁返回）
+    password: String,
 }
 
 async fn handle_request(
@@ -65,90 +87,24 @@ async fn handle_request(
     println!("收到请求: {} {}", method, path);
 
     match (method.as_str(), path) {
-        // 获取服务器公钥
-        ("GET", "/api/pubkey") => {
-            // 导出服务器公钥
-            let pubkey_bytes = export_public_key(&state.server_pubkey);
-            let pubkey_b64 = base64ct::Base64::encode_string(&pubkey_bytes);
+        // 获取加密密钥
+        ("GET", "/api/key") => {
+            // 创建新会话，生成随机 AES 密钥
+            let (session_id, key_bytes) = state.session_manager.create_session();
 
-            // 生成会话 ID
-            let session_id = uuid::Uuid::new_v4().to_string();
+            // 将密钥转为 Base64 传输
+            let key_b64 = base64ct::Base64::encode_string(&key_bytes);
 
-            let response = PubKeyResponse {
-                server_pubkey: pubkey_b64,
-                session_id,
+            println!("创建新会话: {}", session_id);
+
+            let response = KeyResponse {
+                key: key_b64,
+                session_id: session_id.clone(),
             };
 
             Ok(json_response(ApiResponse {
                 success: true,
                 data: Some(response),
-                error: None,
-            }))
-        }
-
-        // 提交客户端公钥
-        ("POST", "/api/register_client") => {
-            let whole_body = req.into_body().collect().await?.to_bytes();
-            let data: serde_json::Value = serde_json::from_slice(&whole_body)
-                .unwrap_or_else(|_| serde_json::json!({}));
-
-            let session_id = data.get("session_id")
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
-            let client_pubkey_b64 = data.get("client_pubkey")
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
-
-            if session_id.is_empty() || client_pubkey_b64.is_empty() {
-                return Ok(json_response(ApiResponse::<()> {
-                    success: false,
-                    data: None,
-                    error: Some("缺少参数".into()),
-                }));
-            }
-
-            // 解码客户端公钥
-            let client_pubkey_bytes = match base64ct::Base64::decode_vec(client_pubkey_b64) {
-                Ok(bytes) => bytes,
-                Err(e) => {
-                    return Ok(json_response(ApiResponse::<()> {
-                        success: false,
-                        data: None,
-                        error: Some(format!("公钥解码失败: {}", e)),
-                    }));
-                }
-            };
-
-            let client_pubkey = match import_public_key(&client_pubkey_bytes) {
-                Ok(key) => key,
-                Err(e) => {
-                    return Ok(json_response(ApiResponse::<()> {
-                        success: false,
-                        data: None,
-                        error: Some(format!("公钥导入失败: {}", e)),
-                    }));
-                }
-            };
-
-            // 派生共享密钥
-            let shared_key = match derive_shared_secret(&state.server_privkey, &client_pubkey) {
-                Ok(key) => key,
-                Err(e) => {
-                    return Ok(json_response(ApiResponse::<()> {
-                        success: false,
-                        data: None,
-                        error: Some(format!("密钥派生失败: {}", e)),
-                    }));
-                }
-            };
-
-            // 存储客户端公钥和共享密钥
-            state.client_keys.lock().unwrap().insert(session_id.to_string(), client_pubkey);
-            state.shared_keys.lock().unwrap().insert(session_id.to_string(), shared_key);
-
-            Ok(json_response(ApiResponse::<()> {
-                success: true,
-                data: Some(()),
                 error: None,
             }))
         }
@@ -174,11 +130,11 @@ async fn handle_request(
                 }));
             }
 
-            // 获取共享密钥
-            let shared_keys = state.shared_keys.lock().unwrap();
-            let shared_key = match shared_keys.get(session_id) {
-                Some(key) => key.clone(),
+            // 获取密钥并删除会话（一次性使用）
+            let key = match state.session_manager.get_and_remove(session_id) {
+                Some(k) => k,
                 None => {
+                    println!("会话无效或已过期: {}", session_id);
                     return Ok(json_response(ApiResponse::<()> {
                         success: false,
                         data: None,
@@ -186,10 +142,12 @@ async fn handle_request(
                     }));
                 }
             };
-            drop(shared_keys);
 
-            // 解密登录数据
-            let decrypted = match decrypt_string(encrypted_data, &shared_key) {
+            // 获取密钥的Base64表示（用于demo展示）
+            let key_b64 = base64ct::Base64::encode_string(key.as_bytes());
+
+            // 解密登录数据（CTR 模式，与前端 crypto-js 兼容）
+            let decrypted = match decrypt_string_ctr(encrypted_data, &key) {
                 Ok(data) => data,
                 Err(e) => {
                     return Ok(json_response(ApiResponse::<()> {
@@ -219,9 +177,22 @@ async fn handle_request(
             let valid = username.len() >= 3 && password.len() >= 6;
 
             if valid {
-                Ok(json_response(ApiResponse::<()> {
+                println!("登录成功: user={}", username);
+
+                // ⚠️ Demo模式：保存解密详情供展示
+                // 生产环境警告：绝对不能在生产环境中保存明文密码！
+                let demo_id = uuid::Uuid::new_v4().to_string();
+                let demo_result = DemoDecryptResult {
+                    key: key_b64,
+                    encrypted_data: encrypted_data.to_string(),
+                    username: username.to_string(),
+                    password: password.to_string(),
+                };
+                state.demo_results.lock().unwrap().insert(demo_id.clone(), demo_result);
+
+                Ok(json_response(ApiResponse {
                     success: true,
-                    data: Some(()),
+                    data: Some(LoginResponse { demo_id }),
                     error: None,
                 }))
             } else {
@@ -233,9 +204,58 @@ async fn handle_request(
             }
         }
 
+        // ⚠️ Demo专用：获取解密详情
+        // 生产环境警告：此接口仅用于demo演示，生产环境绝对不能提供！
+        ("GET", "/api/demo/decrypt_result") => {
+            let query = req.uri().query().unwrap_or("");
+            let demo_id = query
+                .split('&')
+                .find(|p| p.starts_with("demo_id="))
+                .and_then(|p| p.strip_prefix("demo_id="))
+                .unwrap_or("");
+
+            if demo_id.is_empty() {
+                return Ok(json_response(ApiResponse::<DemoDecryptResponse> {
+                    success: false,
+                    data: None,
+                    error: Some("缺少demo_id参数".into()),
+                }));
+            }
+
+            let result = state.demo_results.lock().unwrap()
+                .get(demo_id)
+                .cloned();
+
+            match result {
+                Some(data) => {
+                    Ok(json_response(ApiResponse {
+                        success: true,
+                        data: Some(DemoDecryptResponse {
+                            key: data.key,
+                            encrypted_data: data.encrypted_data,
+                            username: data.username,
+                            password: data.password,
+                        }),
+                        error: None,
+                    }))
+                }
+                None => {
+                    Ok(json_response(ApiResponse::<DemoDecryptResponse> {
+                        success: false,
+                        data: None,
+                        error: Some("Demo结果不存在或已过期".into()),
+                    }))
+                }
+            }
+        }
+
         // 静态文件
         ("GET", _) => {
-            let file_path = "examples/static/login.html";
+            let file_path = match path {
+                "/" => "../static/login.html",
+                "/success.html" => "../static/success.html",
+                _ => "../static/login.html"
+            };
 
             match tokio::fs::read_to_string(file_path).await {
                 Ok(content) => {
@@ -277,19 +297,17 @@ fn json_response<T: serde::Serialize>(data: ApiResponse<T>) -> Response<Full<Byt
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // 生成服务器密钥对
-    let (server_privkey, server_pubkey) = rat_web_credential_encryptor::generate_keypair();
+    // 创建会话管理器（5 分钟超时）
+    let session_manager = SessionManager::new(Duration::from_secs(300));
 
     println!("加密登录示例服务器");
     println!("===================");
-    println!("服务器密钥对已生成");
+    println!("会话管理器已创建（5分钟超时）");
     println!();
 
     let state = ServerState {
-        server_privkey: Arc::new(server_privkey),
-        server_pubkey: Arc::new(server_pubkey),
-        client_keys: Arc::new(Mutex::new(HashMap::new())),
-        shared_keys: Arc::new(Mutex::new(HashMap::new())),
+        session_manager: Arc::new(session_manager),
+        demo_results: Arc::new(Mutex::new(HashMap::new())),
     };
 
     let addr: SocketAddr = ([0, 0, 0, 0], 3000).into();

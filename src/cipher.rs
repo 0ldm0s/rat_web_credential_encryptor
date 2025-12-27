@@ -1,9 +1,16 @@
-//! AES-256-GCM 加密/解密
+//! AES-256 加密/解密
+//!
+//! 支持 GCM 和 CTR 两种模式：
+//! - GCM：提供认证加密，用于需要数据完整性验证的场景
+//! - CTR：与 crypto-js 兼容，用于纯 JS 前端交互
 
 use aes_gcm::{
     aead::{Aead, AeadCore, KeyInit, OsRng},
     Aes256Gcm, Nonce,
 };
+use ctr::Ctr128BE;
+use aes::Aes256;
+use aes::cipher::{KeyIvInit, StreamCipher};
 use base64ct::{Base64, Encoding};
 
 use crate::ecdh::SharedKey;
@@ -100,6 +107,75 @@ pub fn encrypt_string(plaintext: &str, key: &SharedKey) -> Result<String> {
 pub fn decrypt_string(ciphertext_b64: &str, key: &SharedKey) -> Result<String> {
     let encrypted = EncryptedData::from_base64(ciphertext_b64)?;
     let bytes = decrypt(&encrypted, key)?;
+    String::from_utf8(bytes).map_err(|e| Error::Encoding(format!("UTF-8 解码失败: {}", e)))
+}
+
+// ==================== CTR 模式（与 crypto-js 兼容）====================
+
+/// CTR 模式加密数据（与 crypto-js 兼容）
+///
+/// # 参数
+/// - `plaintext`: 明文数据
+/// - `key`: 32 字节的共享密钥
+///
+/// # 返回
+/// Base64 编码的 nonce(16字节) + 密文
+pub fn encrypt_ctr(plaintext: &[u8], key: &SharedKey) -> String {
+    use rand::RngCore;
+
+    let mut nonce = [0u8; 16];  // CTR 使用 16 字节 nonce
+    rand::thread_rng().fill_bytes(&mut nonce);
+
+    let mut cipher = Ctr128BE::<Aes256>::new_from_slices(key.as_bytes(), &nonce)
+        .expect("CTR 初始化失败");
+
+    let mut ciphertext = plaintext.to_vec();
+    cipher.apply_keystream(&mut ciphertext);
+
+    // 组合 nonce || ciphertext
+    let mut result = Vec::with_capacity(16 + ciphertext.len());
+    result.extend_from_slice(&nonce);
+    result.extend_from_slice(&ciphertext);
+
+    Base64::encode_string(&result)
+}
+
+/// CTR 模式解密数据（与 crypto-js 兼容）
+///
+/// # 参数
+/// - `ciphertext_b64`: Base64 编码的 nonce(16字节) + 密文
+/// - `key`: 32 字节的共享密钥
+///
+/// # 返回
+/// 解密后的明文
+pub fn decrypt_ctr(ciphertext_b64: &str, key: &SharedKey) -> Result<Vec<u8>> {
+    let data = Base64::decode_vec(ciphertext_b64)
+        .map_err(|e| Error::Encoding(format!("Base64 解码失败: {}", e)))?;
+
+    if data.len() < 16 {
+        return Err(Error::InvalidInput("加密数据过短".into()));
+    }
+
+    let nonce = &data[0..16];
+    let ciphertext = &data[16..];
+
+    let mut cipher = Ctr128BE::<Aes256>::new_from_slices(key.as_bytes(), nonce)
+        .map_err(|e| Error::Crypto(format!("CTR 初始化失败: {}", e)))?;
+
+    let mut plaintext = ciphertext.to_vec();
+    cipher.apply_keystream(&mut plaintext);
+
+    Ok(plaintext)
+}
+
+/// CTR 模式便捷函数：加密字符串
+pub fn encrypt_string_ctr(plaintext: &str, key: &SharedKey) -> String {
+    encrypt_ctr(plaintext.as_bytes(), key)
+}
+
+/// CTR 模式便捷函数：从 Base64 解密为字符串
+pub fn decrypt_string_ctr(ciphertext_b64: &str, key: &SharedKey) -> Result<String> {
+    let bytes = decrypt_ctr(ciphertext_b64, key)?;
     String::from_utf8(bytes).map_err(|e| Error::Encoding(format!("UTF-8 解码失败: {}", e)))
 }
 

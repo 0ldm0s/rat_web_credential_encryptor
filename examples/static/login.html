@@ -4,14 +4,11 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>加密登录示例</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/crypto-js/4.2.0/crypto-js.min.js"></script>
     <style>
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-        }
+        * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
             background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
             min-height: 100vh;
             display: flex;
@@ -25,28 +22,12 @@
             box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
             padding: 40px;
             width: 100%;
-            max-width: 420px;
+            max-width: 500px;
         }
-        h1 {
-            color: #333;
-            margin-bottom: 10px;
-            font-size: 28px;
-        }
-        .subtitle {
-            color: #666;
-            margin-bottom: 30px;
-            font-size: 14px;
-        }
-        .form-group {
-            margin-bottom: 20px;
-        }
-        label {
-            display: block;
-            color: #444;
-            margin-bottom: 8px;
-            font-weight: 500;
-            font-size: 14px;
-        }
+        h1 { color: #333; margin-bottom: 10px; font-size: 28px; }
+        .subtitle { color: #666; margin-bottom: 30px; font-size: 14px; }
+        .form-group { margin-bottom: 20px; }
+        label { display: block; color: #444; margin-bottom: 8px; font-weight: 500; font-size: 14px; }
         input {
             width: 100%;
             padding: 12px 16px;
@@ -55,10 +36,7 @@
             font-size: 16px;
             transition: border-color 0.3s;
         }
-        input:focus {
-            outline: none;
-            border-color: #667eea;
-        }
+        input:focus { outline: none; border-color: #667eea; }
         button {
             width: 100%;
             padding: 14px;
@@ -69,20 +47,9 @@
             font-size: 16px;
             font-weight: 600;
             cursor: pointer;
-            transition: transform 0.2s, box-shadow 0.2s;
         }
-        button:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
-        }
-        button:active {
-            transform: translateY(0);
-        }
-        button:disabled {
-            background: #ccc;
-            cursor: not-allowed;
-            transform: none;
-        }
+        button:hover { transform: translateY(-2px); box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4); }
+        button:disabled { background: #ccc; cursor: not-allowed; transform: none; }
         .message {
             padding: 12px;
             border-radius: 8px;
@@ -90,19 +57,8 @@
             font-size: 14px;
             display: none;
         }
-        .message.success {
-            background: #d4edda;
-            color: #155724;
-            border: 1px solid #c3e6cb;
-        }
-        .message.error {
-            background: #f8d7da;
-            color: #721c24;
-            border: 1px solid #f5c6cb;
-        }
-        .message.show {
-            display: block;
-        }
+        .message.error { background: #f8d7da; color: #721c24; }
+        .message.show { display: block; }
         .info {
             background: #e8f4f8;
             padding: 12px;
@@ -110,12 +66,6 @@
             margin-bottom: 20px;
             font-size: 13px;
             color: #0c5460;
-        }
-        .info code {
-            background: rgba(0,0,0,0.1);
-            padding: 2px 6px;
-            border-radius: 4px;
-            font-family: monospace;
         }
         .loading {
             display: inline-block;
@@ -126,206 +76,144 @@
             border-top-color: transparent;
             animation: spin 1s linear infinite;
             margin-left: 8px;
-            vertical-align: middle;
         }
-        @keyframes spin {
-            to { transform: rotate(360deg); }
-        }
+        @keyframes spin { to { transform: rotate(360deg); } }
     </style>
 </head>
 <body>
     <div class="container">
         <h1>加密登录</h1>
-        <p class="subtitle">使用 ECDH + AES-GCM 安全传输密码</p>
+        <p class="subtitle">点击登录时实时获取密钥，确保安全</p>
 
         <div class="info">
-            密码使用 <code>ECDH P-256</code> 密钥交换和 <code>AES-256-GCM</code> 加密传输
+            流程：点击登录 → 获取一次性密钥 → 加密 → 发送
         </div>
 
-        <form id="loginForm">
-            <div class="form-group">
-                <label for="username">用户名</label>
-                <input type="text" id="username" name="username" required autocomplete="username" minlength="3">
-            </div>
-            <div class="form-group">
-                <label for="password">密码</label>
-                <input type="password" id="password" name="password" required autocomplete="current-password" minlength="6">
-            </div>
-            <button type="submit" id="submitBtn">
-                登录
-            </button>
-        </form>
+        <div class="form-group">
+            <label for="username">用户名</label>
+            <input type="text" id="username" placeholder="至少3个字符">
+        </div>
+        <div class="form-group">
+            <label for="password">密码</label>
+            <input type="password" id="password" placeholder="至少6个字符">
+        </div>
+        <button type="button" id="submitBtn">登录</button>
 
-        <div id="message" class="message"></div>
+        <div id="message" class="message error"></div>
     </div>
 
     <script>
-        // ==================== 加密库 ====================
+        console.log('页面加载完成');
+
         const CryptoLib = {
-            // 生成 P-256 密钥对
-            async generateKeyPair() {
-                return await crypto.subtle.generateKey(
-                    { name: 'ECDH', namedCurve: 'P-256' },
-                    true,
-                    ['deriveKey', 'deriveBits']
-                );
+            importKey(base64Key) {
+                return CryptoJS.enc.Base64.parse(base64Key);
             },
-
-            // 导出公钥
-            async exportPublicKey(key) {
-                const exported = await crypto.subtle.exportKey('raw', key);
-                return new Uint8Array(exported);
+            generateNonce() {
+                const nonce = new Uint8Array(16);
+                crypto.getRandomValues(nonce);
+                return nonce;
             },
-
-            // 导入公钥
-            async importPublicKey(bytes) {
-                return await crypto.subtle.importKey(
-                    'raw',
-                    bytes.buffer,
-                    { name: 'ECDH', namedCurve: 'P-256' },
-                    true,
-                    []
-                );
-            },
-
-            // 派生共享密钥
-            async deriveSharedKey(privateKey, peerPublicKey) {
-                return await crypto.subtle.deriveKey(
-                    { name: 'ECDH', public: peerPublicKey },
-                    privateKey,
-                    { name: 'AES-GCM', length: 256 },
-                    false,
-                    ['encrypt', 'decrypt']
-                );
-            },
-
-            // 加密字符串为 Base64
-            async encryptString(text, key) {
-                const nonce = crypto.getRandomValues(new Uint8Array(12));
-                const plaintext = new TextEncoder().encode(text);
-                const ciphertext = await crypto.subtle.encrypt(
-                    { name: 'AES-GCM', iv: nonce },
-                    key,
-                    plaintext
-                );
-                const result = new Uint8Array(nonce.length + ciphertext.byteLength);
-                result.set(nonce, 0);
-                result.set(new Uint8Array(ciphertext), nonce.length);
-                return btoa(String.fromCharCode(...result));
+            encryptString(text, keyWords) {
+                const nonceArray = this.generateNonce();
+                const nonceWords = CryptoJS.lib.WordArray.create(nonceArray);
+                const plaintext = CryptoJS.enc.Utf8.parse(text);
+                const encrypted = CryptoJS.AES.encrypt(plaintext, keyWords, {
+                    mode: CryptoJS.mode.CTR,
+                    padding: CryptoJS.pad.NoPadding,
+                    iv: nonceWords
+                });
+                const combined = nonceWords.clone().concat(encrypted.ciphertext);
+                return combined.toString(CryptoJS.enc.Base64);
             }
         };
 
-        // ==================== 应用逻辑 ====================
-        let clientKeyPair = null;
-        let sharedKey = null;
-        let sessionId = null;
-
-        // 将 Uint8Array 转为 Base64
-        function toBase64(bytes) {
-            return btoa(String.fromCharCode(...bytes));
-        }
-
-        // 显示消息
-        function showMessage(text, type) {
+        function showMessage(text) {
+            console.log('显示消息:', text);
             const msgEl = document.getElementById('message');
             msgEl.textContent = text;
-            msgEl.className = `message ${type} show`;
-            setTimeout(() => {
-                msgEl.className = 'message';
-            }, 5000);
+            msgEl.className = 'message error show';
         }
 
-        // 初始化：获取服务器公钥
-        async function init() {
-            try {
-                const response = await fetch('/api/pubkey');
-                const result = await response.json();
-
-                if (!result.success) {
-                    throw new Error(result.error || '获取服务器公钥失败');
-                }
-
-                sessionId = result.data.session_id;
-                const serverPubkeyBytes = Uint8Array.from(atob(result.data.server_pubkey), c => c.charCodeAt(0));
-
-                // 生成客户端密钥对
-                clientKeyPair = await CryptoLib.generateKeyPair();
-
-                // 导入服务器公钥
-                const serverPubkey = await CryptoLib.importPublicKey(serverPubkeyBytes);
-
-                // 派生共享密钥
-                sharedKey = await CryptoLib.deriveSharedKey(clientKeyPair.privateKey, serverPubkey);
-
-                // 注册客户端公钥到服务器
-                const clientPubkeyBytes = await CryptoLib.exportPublicKey(clientKeyPair.publicKey);
-                await fetch('/api/register_client', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        session_id: sessionId,
-                        client_pubkey: toBase64(clientPubkeyBytes)
-                    })
-                });
-
-                console.log('加密初始化完成');
-            } catch (error) {
-                console.error('初始化失败:', error);
-                showMessage('初始化失败: ' + error.message, 'error');
-            }
+        function setButtonState(text, disabled) {
+            const btn = document.getElementById('submitBtn');
+            btn.disabled = disabled;
+            btn.innerHTML = text;
         }
 
-        // 登录表单提交
-        document.getElementById('loginForm').addEventListener('submit', async (e) => {
-            e.preventDefault();
+        const btn = document.getElementById('submitBtn');
+        console.log('按钮元素:', btn);
 
-            const submitBtn = document.getElementById('submitBtn');
+        btn.onclick = async function() {
+            console.log('按钮点击事件触发');
             const username = document.getElementById('username').value;
             const password = document.getElementById('password').value;
 
-            if (!sharedKey) {
-                showMessage('加密通道尚未建立，请刷新页面重试', 'error');
+            console.log('用户名:', username, '密码长度:', password.length);
+
+            if (!username || username.length < 3) {
+                showMessage('用户名至少需要3个字符');
+                return;
+            }
+            if (!password || password.length < 6) {
+                showMessage('密码至少需要6个字符');
                 return;
             }
 
-            submitBtn.disabled = true;
-            submitBtn.innerHTML = '登录中<span class="loading"></span>';
-
             try {
-                // 组合登录数据: username:password
+                console.log('开始获取密钥...');
+                setButtonState('获取密钥中<span class="loading"></span>', true);
+
+                const keyResponse = await fetch('/api/key');
+                console.log('密钥响应状态:', keyResponse.status);
+                const keyResult = await keyResponse.json();
+                console.log('密钥响应:', keyResult);
+
+                if (!keyResult.success) {
+                    throw new Error(keyResult.error || '获取密钥失败');
+                }
+
+                console.log('开始加密...');
+                setButtonState('加密中<span class="loading"></span>', true);
+
+                const keyWords = CryptoLib.importKey(keyResult.data.key);
                 const loginData = `${username}:${password}`;
+                const encryptedData = CryptoLib.encryptString(loginData, keyWords);
+                console.log('加密完成，密文长度:', encryptedData.length);
 
-                // 加密登录数据
-                const encryptedData = await CryptoLib.encryptString(loginData, sharedKey);
+                console.log('发送登录请求...');
+                setButtonState('登录中<span class="loading"></span>', true);
 
-                // 发送到服务器
                 const response = await fetch('/api/login', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
-                        session_id: sessionId,
+                        session_id: keyResult.data.session_id,
                         encrypted_data: encryptedData
                     })
                 });
 
                 const result = await response.json();
+                console.log('登录响应:', result);
 
                 if (result.success) {
-                    showMessage('登录成功！', 'success');
+                    console.log('登录成功，准备跳转...');
+                    const params = new URLSearchParams({
+                        demo_id: result.data.demo_id
+                    });
+                    window.location.href = '/success.html?' + params.toString();
                 } else {
-                    showMessage('登录失败: ' + (result.error || '未知错误'), 'error');
+                    showMessage('登录失败: ' + (result.error || '未知错误'));
+                    setButtonState('登录', false);
                 }
             } catch (error) {
                 console.error('登录错误:', error);
-                showMessage('登录失败: ' + error.message, 'error');
-            } finally {
-                submitBtn.disabled = false;
-                submitBtn.textContent = '登录';
+                showMessage('登录失败: ' + error.message);
+                setButtonState('登录', false);
             }
-        });
+        };
 
-        // 页面加载时初始化
-        init();
+        console.log('事件监听器已绑定');
     </script>
 </body>
 </html>

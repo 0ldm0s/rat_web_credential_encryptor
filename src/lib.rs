@@ -1,44 +1,48 @@
 //! # rat_web_credential_encryptor
 //!
-//! Rust + JavaScript 跨语言加密库，用于 Web 前端与 Rust 后端之间的敏感数据加密传输。
+//! Rust 加密库，用于 Web 应用中敏感数据的加密传输。
 //!
-//! ## 使用流程
+//! ## 设计理念
 //!
-//! 1. 后端生成密钥对
-//! 2. 后端将公钥发送给前端
-//! 3. 前端生成自己的密钥对
-//! 4. 双方使用 ECDH 派生共享密钥
-//! 5. 使用共享密钥进行 AES-GCM 加密通信
+//! 在 HTTPS/TLS 之上提供应用层加密，确保：
+//! - 负载均衡器无法看到明文敏感数据
+//! - 服务器日志记录的是加密数据
+//! - 密钥一次性使用，防重放攻击
+//!
+//! ## 使用流程（简化方案）
+//!
+//! 1. 服务器为每个会话生成临时 AES 密钥
+//! 2. 客户端通过 HTTPS 获取密钥
+//! 3. 客户端用 AES-GCM 加密敏感信息
+//! 4. 服务器解密后立即删除密钥
 //!
 //! ## 示例
 //!
 //! ```rust
 //! use rat_web_credential_encryptor::{
-//!     generate_keypair, export_public_key, import_public_key,
-//!     derive_shared_secret, encrypt_string, decrypt_string,
+//!     session::SessionManager,
+//!     encrypt_string, decrypt_string,
 //! };
+//! use std::time::Duration;
 //!
-//! // 后端生成密钥对
-//! let (server_priv, server_pub) = generate_keypair();
+//! // 创建会话管理器（5 分钟超时）
+//! let manager = SessionManager::new(Duration::from_secs(300));
 //!
-//! // 前端也生成密钥对
-//! let (client_priv, client_pub) = generate_keypair();
+//! // 创建新会话，获取密钥
+//! let (session_id, key_bytes) = manager.create_session();
 //!
-//! // 导出公钥以便在网络传输
-//! let client_pub_bytes = export_public_key(&client_pub);
+//! // key_bytes 通过 HTTPS 安全发送给客户端
+//! // 客户端使用 AES-GCM 加密数据后发送回来
 //!
-//! // 后端导入前端公钥
-//! let client_pub = import_public_key(&client_pub_bytes)?;
+//! // 模拟客户端加密（实际客户端在浏览器中用 JS 加密）
+//! let key = rat_web_credential_encryptor::SharedKey::new(key_bytes);
+//! let encrypted_data = encrypt_string("敏感数据", &key)?;
 //!
-//! // 双方派生共享密钥（结果相同）
-//! let server_shared = derive_shared_secret(&server_priv, &client_pub)?;
-//! let client_shared = derive_shared_secret(&client_priv, &server_pub)?;
-//! assert_eq!(server_shared.as_bytes(), client_shared.as_bytes());
-//!
-//! // 加密数据
-//! let ciphertext = encrypt_string("敏感数据", &server_shared)?;
-//! let decrypted = decrypt_string(&ciphertext, &client_shared)?;
-//! assert_eq!("敏感数据", decrypted);
+//! // 服务器解密（密钥使用后自动删除）
+//! if let Some(key) = manager.get_and_remove(&session_id) {
+//!     let decrypted = decrypt_string(&encrypted_data, &key)?;
+//!     println!("解密成功: {}", decrypted);
+//! }
 //! # Ok::<(), rat_web_credential_encryptor::error::Error>(())
 //! ```
 
@@ -46,9 +50,15 @@ pub mod cipher;
 pub mod ecdh;
 pub mod error;
 pub mod key;
+pub mod session;
 
 // 导出常用类型
 pub use error::{Error, Result};
+
+// 导出会话管理
+pub use session::SessionManager;
+#[cfg(feature = "session-manager-cleanup")]
+pub use session::SessionManagerWithCleanup;
 
 // 导出密钥相关
 pub use key::{generate_keypair, import_public_key, export_public_key, PrivateKey};
@@ -59,3 +69,4 @@ pub use ecdh::{derive_shared_secret, SharedKey};
 
 // 导出加密相关
 pub use cipher::{encrypt, decrypt, EncryptedData, encrypt_string, decrypt_string};
+pub use cipher::{encrypt_ctr, decrypt_ctr, encrypt_string_ctr, decrypt_string_ctr};

@@ -1,0 +1,237 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>加密登录成功</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            background: linear-gradient(135deg, #11998e 0%, #38ef7d 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+        }
+        .header {
+            background: white;
+            border-radius: 12px;
+            padding: 30px;
+            margin-bottom: 20px;
+            box-shadow: 0 10px 40px rgba(0, 0, 0, 0.2);
+            text-align: center;
+        }
+        .header h1 { color: #11998e; font-size: 32px; margin-bottom: 10px; }
+        .header p { color: #666; font-size: 16px; }
+        .card {
+            background: white;
+            border-radius: 12px;
+            padding: 25px;
+            margin-bottom: 20px;
+            box-shadow: 0 5px 20px rgba(0, 0, 0, 0.15);
+        }
+        .card h2 {
+            color: #333;
+            font-size: 18px;
+            margin-bottom: 15px;
+            padding-bottom: 10px;
+            border-bottom: 2px solid #11998e;
+        }
+        .step {
+            display: flex;
+            align-items: flex-start;
+            margin-bottom: 20px;
+        }
+        .step-number {
+            background: #11998e;
+            color: white;
+            width: 30px;
+            height: 30px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: bold;
+            margin-right: 15px;
+            flex-shrink: 0;
+        }
+        .step-content { flex: 1; }
+        .step-title { font-weight: 600; color: #333; margin-bottom: 5px; }
+        .step-desc { color: #666; font-size: 14px; line-height: 1.5; }
+        .code-block {
+            background: #1a1a2e;
+            color: #00ff9d;
+            padding: 15px;
+            border-radius: 8px;
+            font-family: 'Courier New', monospace;
+            font-size: 13px;
+            overflow-x: auto;
+            word-break: break-all;
+            margin-top: 10px;
+        }
+        .label {
+            display: inline-block;
+            background: #e8f4f8;
+            color: #0c5460;
+            padding: 4px 10px;
+            border-radius: 4px;
+            font-size: 12px;
+            font-weight: 600;
+            margin-bottom: 5px;
+        }
+        .highlight {
+            background: linear-gradient(120deg, #ffd700 0%, #ffec8b 100%);
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-weight: 600;
+        }
+        .arrow {
+            text-align: center;
+            font-size: 30px;
+            color: #11998e;
+            margin: 10px 0;
+        }
+        .warning {
+            background: #fff3cd;
+            border-left: 4px solid #ffc107;
+            padding: 15px;
+            border-radius: 4px;
+            margin-top: 20px;
+            font-size: 13px;
+            color: #856404;
+        }
+        .warning strong { color: #dc3545; }
+        .btn-back {
+            display: inline-block;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 12px 30px;
+            border-radius: 8px;
+            text-decoration: none;
+            font-weight: 600;
+            margin-top: 10px;
+        }
+        .loading {
+            text-align: center;
+            padding: 40px;
+            color: #666;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1 id="title">加载中...</h1>
+            <p id="subtitle"></p>
+            <a href="/" class="btn-back">返回登录</a>
+        </div>
+
+        <div id="content" class="loading">
+            正在获取服务器解密结果...
+        </div>
+    </div>
+
+    <script>
+        // 从 URL 参数获取 demo_id
+        const params = new URLSearchParams(window.location.search);
+        const demoId = params.get('demo_id');
+
+        if (!demoId) {
+            document.getElementById('title').textContent = '错误';
+            document.getElementById('subtitle').textContent = '缺少 demo_id 参数';
+            document.getElementById('content').innerHTML = '<p>请从登录页面重新进入</p>';
+        } else {
+            // 从服务器获取解密结果
+            fetch('/api/demo/decrypt_result?demo_id=' + demoId)
+                .then(res => res.json())
+                .then(result => {
+                    if (!result.success) {
+                        throw new Error(result.error || '获取数据失败');
+                    }
+
+                    const data = result.data;
+
+                    // 更新标题
+                    document.getElementById('title').textContent = '登录成功！';
+                    document.getElementById('subtitle').textContent = '您的凭证通过加密安全传输';
+
+                    // 渲染内容
+                    document.getElementById('content').innerHTML = `
+                        <div class="card">
+                            <h2>加密传输流程演示</h2>
+
+                            <div class="step">
+                                <div class="step-number">1</div>
+                                <div class="step-content">
+                                    <div class="step-title">服务端生成一次性密钥</div>
+                                    <div class="step-desc">
+                                        服务器生成随机的 AES-256 密钥，通过 HTTPS 发送给客户端。<br>
+                                        密钥仅可使用一次，使用后立即销毁。
+                                    </div>
+                                    <span class="label">AES-256 密钥 (Base64)</span>
+                                    <div class="code-block">${data.key}</div>
+                                </div>
+                            </div>
+
+                            <div class="arrow">↓</div>
+
+                            <div class="step">
+                                <div class="step-number">2</div>
+                                <div class="step-content">
+                                    <div class="step-title">客户端加密数据</div>
+                                    <div class="step-desc">
+                                        客户端使用 crypto-js 库，以 <span class="highlight">AES-CTR 模式</span> 加密登录信息。
+                                    </div>
+                                    <span class="label">原始明文</span>
+                                    <div class="code-block">${data.username}:${data.password}</div>
+                                    <span class="label">加密后的密文</span>
+                                    <div class="code-block">${data.encrypted_data}</div>
+                                </div>
+                            </div>
+
+                            <div class="arrow">↓</div>
+
+                            <div class="step">
+                                <div class="step-number">3</div>
+                                <div class="step-content">
+                                    <div class="step-title">服务端解密验证</div>
+                                    <div class="step-desc">
+                                        服务器使用对应会话的密钥解密数据，<span class="highlight">解密后立即删除密钥</span>。
+                                    </div>
+                                    <span class="label">服务端解密结果</span>
+                                    <div class="code-block" style="color: #4ade80;">✓ 解密成功 | 用户: ${data.username} | 密码: ${data.password}</div>
+                                </div>
+                            </div>
+
+                            <div class="warning">
+                                <strong>⚠️ 安全警告：</strong><br>
+                                此页面展示的明文密码仅供演示加密/解密流程。<br>
+                                <strong>生产环境中，服务器绝对不能存储或返回明文密码！</strong>
+                            </div>
+                        </div>
+
+                        <div class="card">
+                            <h2>安全特性</h2>
+                            <ul style="line-height: 2; color: #666;">
+                                <li>密钥一次性使用，防止重放攻击</li>
+                                <li>密钥有5分钟超时，降低风险窗口</li>
+                                <li>在 HTTPS 基础上增加应用层加密</li>
+                                <li>负载均衡器无法看到明文密码</li>
+                                <li>服务器日志中只记录加密数据</li>
+                            </ul>
+                        </div>
+                    `;
+                })
+                .catch(error => {
+                    console.error('获取数据失败:', error);
+                    document.getElementById('title').textContent = '错误';
+                    document.getElementById('subtitle').textContent = '无法获取解密结果';
+                    document.getElementById('content').innerHTML = `<p>${error.message}</p>`;
+                });
+        }
+    </script>
+</body>
+</html>
