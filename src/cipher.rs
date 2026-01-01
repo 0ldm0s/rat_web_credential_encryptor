@@ -5,9 +5,10 @@
 //! - CTR：与 crypto-js 兼容，用于纯 JS 前端交互
 
 use aes_gcm::{
-    aead::{Aead, AeadCore, KeyInit, OsRng},
+    aead::{Aead, AeadCore, AeadInPlace, KeyInit, OsRng},
     Aes256Gcm, Nonce,
 };
+use generic_array::GenericArray;
 use ctr::Ctr128BE;
 use aes::Aes256;
 use aes::cipher::{KeyIvInit, StreamCipher};
@@ -18,30 +19,37 @@ use crate::error::{Error, Result};
 
 /// 加密后的数据
 ///
-/// 包含 nonce 和密文，格式为: nonce(12字节) + ciphertext
+/// 格式为: nonce(12字节) + authTag(16字节) + ciphertext
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EncryptedData {
-    /// Nonce (96 位，12 字节) + 密文
+    /// 格式: nonce(12) + authTag(16) + ciphertext
     data: Vec<u8>,
 }
 
 impl EncryptedData {
-    /// 创建新的加密数据
-    fn new(nonce: &[u8; 12], ciphertext: &[u8]) -> Self {
-        let mut data = Vec::with_capacity(12 + ciphertext.len());
+    /// 创建新的加密数据（包含 authTag）
+    fn new(nonce: &[u8; 12], auth_tag: &[u8], ciphertext: &[u8]) -> Self {
+        let mut data = Vec::with_capacity(12 + 16 + ciphertext.len());
         data.extend_from_slice(nonce);
+        data.extend_from_slice(auth_tag);
         data.extend_from_slice(ciphertext);
         Self { data }
     }
 
     /// 获取 nonce
     pub fn nonce(&self) -> &[u8; 12] {
+        // 安全地返回 slice
         self.data[0..12].try_into().unwrap()
+    }
+
+    /// 获取 authTag
+    pub fn auth_tag(&self) -> &[u8] {
+        &self.data[12..28]
     }
 
     /// 获取密文
     pub fn ciphertext(&self) -> &[u8] {
-        &self.data[12..]
+        &self.data[28..]
     }
 
     /// 转换为 Base64 字符串
@@ -52,7 +60,7 @@ impl EncryptedData {
     /// 从 Base64 字符串解析
     pub fn from_base64(s: &str) -> Result<Self> {
         let data = Base64::decode_vec(s).map_err(|e| Error::Encoding(format!("Base64 解码失败: {}", e)))?;
-        if data.len() < 12 {
+        if data.len() < 28 {  // 12 + 16 = 28 (最小长度)
             return Err(Error::InvalidInput("加密数据过短".into()));
         }
         Ok(Self { data })
@@ -66,17 +74,19 @@ impl EncryptedData {
 /// - `key`: 32 字节的共享密钥
 ///
 /// # 返回
-/// 包含 nonce 和密文的加密数据
+/// 包含 nonce、authTag 和密文的加密数据
 pub fn encrypt(plaintext: &[u8], key: &SharedKey) -> Result<EncryptedData> {
     let cipher = Aes256Gcm::new(key.as_bytes().into());
     let nonce = Aes256Gcm::generate_nonce(&mut OsRng);
 
-    let ciphertext = cipher
-        .encrypt(&nonce, plaintext)
+    // 加密
+    let mut buffer = plaintext.to_vec();
+    let tag = cipher
+        .encrypt_in_place_detached(&nonce, &[], &mut buffer)
         .map_err(|e| Error::Crypto(format!("加密失败: {}", e)))?;
 
     let nonce_array: [u8; 12] = nonce.as_slice().try_into().unwrap();
-    Ok(EncryptedData::new(&nonce_array, &ciphertext))
+    Ok(EncryptedData::new(&nonce_array, tag.as_slice(), &buffer))
 }
 
 /// 使用 AES-256-GCM 解密数据
@@ -91,11 +101,18 @@ pub fn decrypt(encrypted: &EncryptedData, key: &SharedKey) -> Result<Vec<u8>> {
     let cipher = Aes256Gcm::new(key.as_bytes().into());
     let nonce = Nonce::from_slice(encrypted.nonce());
 
-    let plaintext = cipher
-        .decrypt(nonce, encrypted.ciphertext())
+    // 将 auth_tag 转换为 GenericArray
+    let tag: &GenericArray<u8, generic_array::typenum::U16> = GenericArray::from_slice(encrypted.auth_tag())
+        .try_into()
+        .map_err(|_| Error::Crypto("无效的 authTag".to_string()))?;
+
+    // 解密
+    let mut buffer = encrypted.ciphertext().to_vec();
+    cipher
+        .decrypt_in_place_detached(nonce, &[], &mut buffer, tag)
         .map_err(|e| Error::Crypto(format!("解密失败: {}", e)))?;
 
-    Ok(plaintext)
+    Ok(buffer)
 }
 
 /// 便捷函数：加密字符串并返回 Base64
